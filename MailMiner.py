@@ -128,6 +128,7 @@ def FetchDecode(server,detail):
 if __name__ == "__main__":
     import configparser
     import imaplib
+    import Converters # Secondary Library where Converters functinos are defined
     from imapclient import IMAPClient
     serverconf, config = configparser.ConfigParser(), configparser.ConfigParser()
     serverconf.read(r"server.cfg")
@@ -211,12 +212,12 @@ A regex was expected. This section will be skipped"""
             } for uid in filedetails
         )
         # Runs the named function directly from the local scope
-        locals()[
+        getattr(Converters,
             config.get(
                 section,
                 "converter",
                 fallback="Shelve",
             )
-        ](filedata,settings)
+        )(filedata,settings)
     print(server.logout().decode())
 
