@@ -43,8 +43,7 @@ def WellesbourneWeather(filedata,settings):
     regexsplitlines = re.compile(b'(.+?)(?:\r\n|\r|\n|$)', flags=re.MULTILINE)
     headers = settings["headers"].split(",")
     with open(settings["outfile"], "a+", newline="") as output:
-        NeedHeaders = not(len(output.read(1)))
-        output.seek(0,2)
+        NeedHeaders = not(output.tell()) # in append mode, tell==0 if new file
         # Create the Output CSV File
         csvout = csv.writer(output, dialect="excel")
         # Only if needed, apply the Headings
@@ -116,8 +115,7 @@ def Bablake(filedata,settings):
     r=0
     seen = set()
     with open(settings["outfile"], "a+", newline="") as output:
-        NeedHeaders = not(len(output.read(1)))
-        output.seek(0,2)
+        NeedHeaders = not(output.tell()) # in append mode, tell==0 if new file
         # Create the Output CSV File
         csvout = csv.writer(output, dialect="excel")
         # Only if needed, apply the Headings
