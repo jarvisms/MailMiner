@@ -1,5 +1,93 @@
 import base64
 import re
+import quopri
+
+encoded_word_regex = re.compile(r'=\?{1}(.+)\?{1}([B|Q])\?{1}(.+)\?{1}='.encode())
+
+# https://stackoverflow.com/questions/12739563/parsing-email-bodystructure-in-python?noredirect=1
+# ----- Parsing BODYSTRUCTURE into parts dictionaries ----- #
+
+def tuple2dict(pairs):
+    """get dict from (key, value, key, value, ...) tuple"""
+    if not pairs:
+        return None
+    return dict([(k, tuple2dict(v) if isinstance(v, tuple) else v)
+                 for k, v in zip(pairs[::2], pairs[1::2])])
+
+def parse_singlepart(var, part_no):
+    """convert non-multipart into dic"""
+    # Basic fields for non-multipart (Required)
+    part = dict(zip(['maintype', 'subtype', 'params', 'id', 'description', 'encoding', 'size'], var[:7]), part_no=part_no)
+    part['params'] = tuple2dict(part['params'])
+    # Type specific fields (Required for 'message' or 'text' type)
+    index = 7
+    if part['maintype'].lower() == 'message' and part['subtype'].lower() == 'rfc822':
+        part.update(zip(['envelope', 'bodystructure', 'lines'], var[7:10]))
+        index = 10
+    elif part['maintype'].lower() == 'text':
+        part['lines'] = var[7]
+        index = 8
+    # Extension fields for non-multipart (Optional)
+    part.update(zip(['md5', 'disposition', 'language', 'location'], var[index:]))
+    part['disposition'] = tuple2dict(part['disposition'])
+    return part
+
+def parse_multipart(var, part_no):
+    """convert the multipart into dict"""
+    part = { 'child_parts': [], 'part_no': part_no }
+    # First parse the child parts
+    index = 0
+    if isinstance(var[0], list):
+        part['child_parts'] = [parse_part(v, ('%s.%d' % (part_no, i+1)).replace('TEXT.', '')) for i, v in enumerate(var[0])]
+        index = 1
+    elif isinstance(var[0], tuple):
+        while isinstance(var[index], tuple):
+            part['child_parts'].append(parse_part(var[index], ('%s.%d' % (part_no, index+1)).replace('TEXT.', '')))
+            index += 1
+    # Then parse the required field subtype and optional extension fields
+    part.update(zip(['subtype', 'params', 'disposition', 'language', 'location'], var[index:]))
+    part['params'] = tuple2dict(part['params'])
+    part['disposition'] = tuple2dict(part['disposition'])
+    return part
+
+def parse_part(var, part_no=None):
+    """Parse IMAP email BODYSTRUCTURE into nested dictionary
+
+    See http://tools.ietf.org/html/rfc3501#section-6.4.5 for structure of email messages
+    See http://tools.ietf.org/html/rfc3501#section-7.4.2 for specification of BODYSTRUCTURE
+    """
+    if isinstance(var[0], (tuple, list)):
+        return parse_multipart(var, part_no or 'TEXT')
+    else:
+        return parse_singlepart(var, part_no or '1')
+
+# ----- End of Parsing BODYSTRUCTURE into parts dictionaries ----- #
+
+def FlatParts(parts, flat=None):
+    if flat is None:
+        flat = {}
+    child_parts = parts.get('child_parts',[])
+    parent_part = {k:v for k,v in parts.items() if k != 'child_parts'}
+    flat.update({ parent_part['part_no'] : parent_part })
+    for part in child_parts:
+        FlatParts(part,flat)
+    return flat
+
+
+def DecodeFilename(filename):
+    """Decodes a bytes filename to a standard string if it is
+    base64 or quopri word encoded or assumed utf-8 bytes"""
+    encoded = encoded_word_regex.fullmatch(filename)
+    if encoded:
+        charset, encoding, encoded_text = encoded.groups()
+        if encoding == b'B':
+            filename = base64.b64decode(encoded_text).decode(charset.decode())
+        elif encoding == b'Q':
+            filename = quopri.decodestring(encoded_text).decode(charset.decode())
+    else:
+        filename = filename.decode()
+    return filename
+
 
 def FindAttachments(server,settings):
     """Given a server and settings containing the criteria,
@@ -15,64 +103,52 @@ def FindAttachments(server,settings):
     for uid in msguids:
         msgstruct = allmsgstructs[uid]
         if (b"BODYSTRUCTURE" in msgstruct):
-            # Iterate over parts of a multipart message
-            for p in range(len(msgstruct[b"BODYSTRUCTURE"][0])):
-                # Get the content-disposition field if there is one.
-                # Expression OR (None,) will yield the tuple if None
-                # so the [0] indexing works later
-                cd = (msgstruct[b"BODYSTRUCTURE"][0][p][-3] or (None,))
-                # find where content-disposition says its an attachment
-                if ( cd[0] == b"attachment" ):
-                    # the -3rd field is a "parameter parenthesized list"
-                    # for the attachment. Take the attribute/value tuple
-                    # and convert it into a dict first.
-                    properties = dict(
-                        zip(
-                            *[iter(
-                                msgstruct[b"BODYSTRUCTURE"][0][p][-3][1],
-                            )]*2
-                        )
-                    )
+            # Get all nested parts in a flat dictionary
+            # Find parts which are of attachment disposition
+            parts = FlatParts(parse_part(msgstruct[b"BODYSTRUCTURE"]))
+            for p in parts:
+                properties = {} # Specific for the part
+                part = parts[p]
+                disposition = part.get("disposition")
+                if disposition is not None and b"attachment" in disposition:
+                    properties = disposition
+                    # Decode file name into standard string
+                    properties[b"filename"] = DecodeFilename(disposition[b"attachment"][b"filename"])
                     # Check if the filename  matches the regex criteria
-                    regexmatch = settings["regex"].fullmatch(
-                        properties[b"filename"],
-                    )
-                    print(
-                        "File: {filename} in email ID {id} tested as {match}".format(
-                            filename = properties[b"filename"].decode(),
-                            id = uid,
-                            match = True if regexmatch else False,
-                        )
-                    )
+                    regexmatch = settings["regex"].fullmatch(properties[b"filename"])
+                    print(f"File: {properties[b'filename']} in email {uid}/{p} tested as {True if regexmatch else False}")
                     properties.update(
                         {
                             b"uid":uid,
                             b"regexmatch":regexmatch,
-                            b"encoding":msgstruct[b"BODYSTRUCTURE"][0][p][5],
-                            b"textsize":msgstruct[b"BODYSTRUCTURE"][0][p][6],
-                            b"part":p+1,
+                            b"encoding":part["encoding"],
+                            b"textsize":part["size"],
+                            b"part":p,
                         }
-                        )
+                    )
                     # If encoding is correct and filename matches the regex
                     if properties[b"encoding"] == b"base64" and regexmatch:
                         # It should already have a dict so
                         # add this filename and email body part number
                         # (which start from 1)
-                        filedetails[uid] = properties
+                        if uid in filedetails: filedetails[uid][p] = properties
+                        else: filedetails[uid] = {p:properties}
     return filedetails
 
-def FetchAttachments(server,filedetails,filedata=[]):
+
+def FetchAttachments(server,filedetails,filedata=None):
     """Given a server and list of email parts,
     Returns a list of dicts containing of real file data contents
     This function is memory inefficient"""
     # Filedata will continue to grow with successive calls to
     # FetchAttachments unless filedata is explicitly parsed
+    if filedata is None: filedata = []
     byparts={}
     batch={}
     for id in filedetails:
-        part = filedetails[id][b"part"]
-        # For each body[part], list the UIDs for a bulk download
-        byparts[part] = [id] if part not in byparts else byparts[part]+[id]
+        for part in filedetails[id].keys():
+            # For each body[part], list the UIDs for a bulk download
+            byparts[part] = [id] if part not in byparts else byparts[part]+[id]
     for part in byparts:
         print("Starting to download a batch from the IMAP server...")
         # Get the actual payload remembering that IMAP Body parts are
@@ -96,33 +172,21 @@ def FetchAttachments(server,filedetails,filedata=[]):
                     **filedetails[uid]
                 }
             )
-            print(
-                "Decoded '{}'".format(
-                    filedetails[uid][b"filename"].decode()
-                )
-            )
+            print(f"Decoded '{filedetails[uid][part][b'filename']}' from email {uid}/{part}")
     return filedata
 
 
 def FetchDecode(server,detail):
     """Fetches an email attachment and returned the decoded contents"""
-    print(
-        "Downloading email ID: {}, part: {}".format(
-            detail[b"uid"],detail[b"part"],
-        )
-    )
+    print(f"Downloading email ID: {detail[b'uid']}, part: {detail[b'part']}")
     # Fetches and decodes payload immediately
     data = base64.b64decode(
         server.fetch(
             detail[b"uid"],
-            ["BODY[{}]".format(detail[b"part"]).encode()],
-        )[detail[b"uid"]]["BODY[{}]".format(detail[b"part"]).encode()]
+            [f"BODY[{detail[b'part']}]".encode()],
+        )[detail[b"uid"]][f"BODY[{detail[b'part']}]".encode()]
     )
-    print(
-        "Attachment: '{}', {} bytes.".format(
-            detail[b"filename"].decode(),len(data)
-        )
-    )
+    print(f"Attachment: '{detail[b'filename']}', {len(data)} bytes.")
     return data
 
 if __name__ == "__main__":
@@ -175,7 +239,7 @@ Check the "Settings" section contains the "server",
         settings["regex"] = re.compile(
             config.get(
                 section,"filename",fallback=None,
-            ).encode()
+            )
         )
         if "filename" not in settings or settings["filename"] == "":
             print(
@@ -198,18 +262,15 @@ A regex was expected. This section will be skipped"""
         )
         # Get all the attachment details
         filedetails = FindAttachments(server,settings)
-        print("Found {} attachments".format(len(filedetails)))
+        print(f"Found {len(filedetails)} attachments")
         # Generator Expression where each element is a copy of
         # the original filedetails dictionary along with the
         # bytedata after fetching, downloading and decoding it
         filedata = (
             {
-                "bytedata":FetchDecode(
-                    server,
-                    filedetails[uid],
-                ),
-                **filedetails[uid],
-            } for uid in filedetails
+                "bytedata":FetchDecode(server,part),
+                **part,
+            } for msg in filedetails.values() for part in msg.values()
         )
         # Runs the named function directly from the local scope
         getattr(Converters,

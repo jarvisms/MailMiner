@@ -21,11 +21,7 @@ def Concatenate(filedata,settings):
     with open(settings["outfile"], "a+b") as output:
         # Iterates through generator which will fetch and decode each item
         for file in filedata:
-            print(
-                "Processing file '{}'".format(
-                    file[b"filename"].decode(),
-                )
-            )
+            print(f"Processing file '{file[b'filename']}'")
             output.write(file["bytedata"])    # Actually writes the data
     return None
 
@@ -53,11 +49,7 @@ def WellesbourneWeather(filedata,settings):
         r=0
         for file in filedata:
             try:
-                print(
-                    "Processing file '{}'".format(
-                        file[b"filename"].decode(),
-                    )
-                )
+                print(f"Processing file '{file[b'filename']}'")
                 # Take the raw file which is just bytes,
                 # chop it into lines and feed that into csv module.
                 # regex finditer is more memory efficient than str.splitlines()
@@ -86,16 +78,12 @@ def WellesbourneWeather(filedata,settings):
                         + [ConvertNum(item) for item in itemgetter(
                             4,5,6,7,8,9,10,11,13,14)(line)])
                     r+=1
-                print("{} unique rows written so far".format(r))
+                print(f"{r} unique rows written so far")
             except Exception as e:
-                print(
-                    """Encountered some issue with '{}',
-but {} rows written so far.
-Error: {}""".format(
-                        file[b"filename"].decode(),r,e,
-                    )
-                )
-    print("Finished. {} unique rows written\n".format(r))
+                print(f"""Encountered some issue with '{file[b"filename"]}',
+but {r} rows written so far.
+Error: {e}""")
+    print(f"Finished. {r} unique rows written\n")
     return None
 
 def Bablake(filedata,settings):
@@ -124,6 +112,14 @@ def Bablake(filedata,settings):
             csvout.writerow(settings["headers"].split(","))
         for file in filedata:
             try:
+                filename = file[b"filename"]
+                print(f"Processing file '{filename}'")
+                wb = open_workbook(
+                    filename=filename,
+                    file_contents=file["bytedata"],
+                )
+                # Open the next input workbook
+                s = wb.sheet_by_index(0)
                 # Get the month and year that file attachment
                 # is intended for based on the filename.
                 # Start by getting a byted parts dictionary
@@ -131,7 +127,7 @@ def Bablake(filedata,settings):
                 dateparts = file[b"regexmatch"].groupdict()
                 # Convert all values to normal strings
                 dateparts = {
-                    part:dateparts[part].decode() for part in dateparts
+                    part:dateparts[part] for part in dateparts
                 }
                 # Expand the dictionary to a string and  convert to a date
                 filedate = datetime.strptime(
@@ -139,16 +135,6 @@ def Bablake(filedata,settings):
                 )
                 # Work out the 1st Jan of that year
                 baseyear = datetime(filedate.year,1,1)
-                filename = file[b"filename"].decode()
-                print(
-                    "Processing file '{}'".format(filename)
-                )
-                # Open the next input workbook
-                wb = open_workbook(
-                    filename=filename,
-                    file_contents=file["bytedata"],
-                )
-                s = wb.sheet_by_index(0)
                 # Work through all rows except the heading unless it's been
                 # seen already reformat the date and time, and write to csv file
                 for row in range(1,s.nrows):
@@ -173,26 +159,21 @@ def Bablake(filedata,settings):
                         elif ( filedate.month == 12 and dt.month == 1 ):
                             # If file is for December but data for January,
                             # data is actually for the next year
-                            dt.replace(year=baseyear+1)
+                            dt.replace(year=baseyear.year+1)
                         # Dump it to the file
                         csvout.writerow(
                             [dt.strftime("%d/%m/%Y %H:%M")]
                             + s.row_values(row,3,ncols)
                         )
                         r+=1
-                print("{} unique rows written so far".format(r))
+                print(f"{r} unique rows written so far")
             except Exception as e:
-                print(
-                    """Encountered some issue with '{}', but {} rows written so far.
-Error: {}
-                    """.format(
-                        file[b"filename"].decode(),r,e,
-                    )
-                )
+                print(f"""Encountered some issue with '{file[b"filename"]}', but {r} rows written so far.
+Error: {e}""")
             # Clean up and state number of rows written
             finally:
                 wb.release_resources()
-    print("Finished. {} unique rows written\n".format(r))
+    print(f"Finished. {r} unique rows written\n")
     return None
 
 def Shelve(filedata,settings):
