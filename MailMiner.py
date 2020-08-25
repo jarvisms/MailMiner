@@ -21,10 +21,10 @@ def parse_singlepart(var, part_no):
     part['params'] = tuple2dict(part['params'])
     # Type specific fields (Required for 'message' or 'text' type)
     index = 7
-    if part['maintype'].lower() == 'message' and part['subtype'].lower() == 'rfc822':
+    if part['maintype'].lower() in (b'message','message') and part['subtype'].lower() in (b'rfc822','rfc822'):
         part.update(zip(['envelope', 'bodystructure', 'lines'], var[7:10]))
         index = 10
-    elif part['maintype'].lower() == 'text':
+    elif part['maintype'].lower() in (b'text','text'):
         part['lines'] = var[7]
         index = 8
     # Extension fields for non-multipart (Optional)
