@@ -36,7 +36,7 @@ def WellesbourneWeather(filedata,settings):
     from datetime import datetime
     from operator import itemgetter
     # Precompile regex to capture text before line ends
-    regexsplitlines = re.compile(b'(.+?)(?:\r\n|\r|\n|$)', flags=re.MULTILINE)
+    regexsplitlines = re.compile(b'^(.+?)(?:\r\n|\r|\n|$)+', flags=re.MULTILINE)
     headers = settings["headers"].split(",")
     with open(settings["outfile"], "a+", newline="") as output:
         NeedHeaders = not(output.tell()) # in append mode, tell==0 if new file
