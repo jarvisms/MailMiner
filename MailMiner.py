@@ -194,13 +194,18 @@ if __name__ == "__main__":
     import imaplib
     import Converters # Secondary Library where Converters functinos are defined
     from imapclient import IMAPClient
+    from msal import ConfidentialClientApplication
     serverconf, config = configparser.ConfigParser(), configparser.ConfigParser()
     serverconf.read(r"server.cfg")
     config.read(r"config.cfg")
     
     try:
         ServerSettings = dict(serverconf.items("Settings"))
+        clientid = ServerSettings["clientid"]
+        tenantid = ServerSettings["tenantid"]
         imapserver = ServerSettings["server"]
+        scopes = [f"https://{imapserver}/.default"]
+        authority = f"https://login.microsoftonline.com/{tenantid}"
         username = ServerSettings["username"]
         password = ServerSettings["password"]
         tasks = [task.strip() for task in ServerSettings["tasks"].split(",")]
@@ -209,16 +214,21 @@ if __name__ == "__main__":
     except KeyError:
         print(
             """Error with server settings in config file.
-Check the "Settings" section contains the "server",
-"username", "password", and "tasks" options"""
+Check the "Settings" section contains the "server", "clientid",
+"tenantid", "username", "password", and "tasks" options"""
         )
     
+    app = ConfidentialClientApplication(
+        client_id = clientid, authority = authority, client_credential = password
+        )
+    
+    token = app.acquire_token_for_client(scopes=scopes)
     # Use UIDs so numbers are permanent
     server = IMAPClient(imapserver, use_uid=True)
     # Standard TLS version doesnt work so make the connection by hand
     server._imap = imaplib.IMAP4_SSL(host=imapserver)
-        # Actually login and print the output while at it
-    print(server.login(username,password).decode())
+    # Actually login and print the output while at it
+    print(server.oauth2_login(username, token["access_token"], mech='XOAUTH2')[0].decode())
 
     for section in tasks:
         settings = dict(config.items(section))
