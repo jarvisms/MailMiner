@@ -276,19 +276,20 @@ A regex was expected. This section will be skipped"""
         # Generator Expression where each element is a copy of
         # the original filedetails dictionary along with the
         # bytedata after fetching, downloading and decoding it
-        filedata = (
-            {
-                "bytedata":FetchDecode(server,part),
-                **part,
-            } for msg in filedetails.values() for part in msg.values()
-        )
-        # Runs the named function directly from the local scope
-        getattr(Converters,
-            config.get(
-                section,
-                "converter",
-                fallback="Shelve",
+        if len(filedetails) > 0:
+            filedata = (
+                {
+                    "bytedata":FetchDecode(server,part),
+                    **part,
+                } for msg in filedetails.values() for part in msg.values()
             )
-        )(filedata,settings)
+            # Runs the named function directly from the local scope
+            getattr(Converters,
+                config.get(
+                    section,
+                    "converter",
+                    fallback="Shelve",
+                )
+            )(filedata,settings)
     print(server.logout().decode())
 
