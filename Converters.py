@@ -25,9 +25,9 @@ def Concatenate(filedata,settings):
             output.write(file["bytedata"])    # Actually writes the data
     return None
 
-def WellesbourneWeather(filedata,settings):
+def MetOfficeWeather(filedata,settings):
     """Write output to a csv file of predefined format from a concatenation
-    of multiple file attachements from the Wellesbourne Weather Station csv format
+    of multiple file attachements from the MetOffice Weather Station csv format
     
     Expects to be given an iterable giving dictionaries
     with a filename and raw bytes filedata"""
@@ -37,7 +37,6 @@ def WellesbourneWeather(filedata,settings):
     from operator import itemgetter
     # Precompile regex to capture text before line ends
     regexsplitlines = re.compile(b'^(.+?)(?:\r\n|\r|\n|$)+', flags=re.MULTILINE)
-    headers = settings["headers"].split(",")
     with open(settings["outfile"], "a+", newline="") as output:
         NeedHeaders = not(output.tell()) # in append mode, tell==0 if new file
         # Create the Output CSV File
