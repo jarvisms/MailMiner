@@ -37,6 +37,14 @@ def MetOfficeWeather(filedata,settings):
     from operator import itemgetter
     # Precompile regex to capture text before line ends
     regexsplitlines = re.compile(b'^(.+?)(?:\r\n|\r|\n|$)+', flags=re.MULTILINE)
+    # Establish from the headers what is wanted.
+    # Explicitly empty header coloumns are discarded.
+    headers = settings["headers"].split(",")
+    itemlist, headings = [], []
+    for item in enumerate(headers, start=1):
+        if item[1] != "":
+            itemlist.append(item[0])
+            headings.append(item[1])
     with open(settings["outfile"], "a+", newline="") as output:
         NeedHeaders = not(output.tell()) # in append mode, tell==0 if new file
         # Create the Output CSV File
@@ -44,7 +52,7 @@ def MetOfficeWeather(filedata,settings):
         # Only if needed, apply the Headings
         # skipping the first 2 coloumns as these are discarded
         if NeedHeaders:
-            csvout.writerow(settings["headers"].split(","))
+            csvout.writerow(headings)
         r=0
         for file in filedata:
             try:
@@ -69,13 +77,14 @@ def MetOfficeWeather(filedata,settings):
                     # Assumes dates are valid %d/%m/%Y,%H%M and will become
                     # %d/%m/%Y %H:%M with leading zeros inserted if missing.
                     # All numbers are converted or left blank
-                    # but only the non blank coloumns are chosen
+                    # but only the requested coloumns are chosen
+                    # and the timestamp coloumns skipped
                     csvout.writerow(
                         [datetime.strptime(
                             " ".join(line[:2]), "%d/%m/%Y %H%M"
                                 ).strftime("%d/%m/%Y %H:%M")]
                         + [ConvertNum(item) for item in itemgetter(
-                            4,5,6,7,8,9,10,11,13,14)(line)])
+                            *itemlist[1:])(line)])
                     r+=1
                 print(f"{r} unique rows written so far")
             except Exception as e:
