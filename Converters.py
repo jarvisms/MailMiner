@@ -117,7 +117,7 @@ def Bablake(filedata,settings):
         # Only if needed, apply the Headings
         # skipping the first 2 coloumns as these are discarded
         if NeedHeaders:
-            csvout.writerow(settings["headers"].split(","))
+            csvout.writerow(headers)
         for file in filedata:
             try:
                 filename = file[b"filename"]

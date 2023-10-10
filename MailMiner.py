@@ -110,7 +110,7 @@ def FindAttachments(server,settings):
                 properties = {} # Specific for the part
                 part = parts[p]
                 disposition = part.get("disposition")
-                if disposition is not None and b"attachment" in disposition:
+                if disposition is not None and b"attachment" in disposition and b"filename" in disposition[b"attachment"]:
                     properties = disposition
                     # Decode file name into standard string
                     properties[b"filename"] = DecodeFilename(disposition[b"attachment"][b"filename"])
@@ -127,7 +127,7 @@ def FindAttachments(server,settings):
                         }
                     )
                     # If encoding is correct and filename matches the regex
-                    if properties[b"encoding"] == b"base64" and regexmatch:
+                    if properties[b"encoding"] in (b"base64", b"7BIT") and regexmatch:
                         # It should already have a dict so
                         # add this filename and email body part number
                         # (which start from 1)
@@ -153,7 +153,7 @@ def FetchAttachments(server,filedetails,filedata=None):
         print("Starting to download a batch from the IMAP server...")
         # Get the actual payload remembering that IMAP Body parts are
         # indexed from 1 which has already been added,
-        # this will be base64 encoded
+        # this will be base64 or 7BIT encoded
         batch.update(
             server.fetch(
                 byparts[part],
@@ -164,11 +164,10 @@ def FetchAttachments(server,filedetails,filedata=None):
         for uid in byparts[part]:
             # Decode the data into proper bytes in each
             # batch of parts and add to the big list
+            data = batch[uid][f"BODY[{part}]".encode()]
             filedata.append(
                 {
-                    "bytedata" : base64.b64decode(
-                        batch[uid][f"BODY[{part}]".encode()]
-                    ),
+                    "bytedata" : base64.b64decode(data) if filedetails[uid][part][b'encoding'] == b"base64" else data,
                     **filedetails[uid]
                 }
             )
@@ -180,12 +179,13 @@ def FetchDecode(server,detail):
     """Fetches an email attachment and returned the decoded contents"""
     print(f"Downloading email ID: {detail[b'uid']}, part: {detail[b'part']}")
     # Fetches and decodes payload immediately
-    data = base64.b64decode(
-        server.fetch(
+    data = server.fetch(
             detail[b"uid"],
             [f"BODY[{detail[b'part']}]".encode()],
         )[detail[b"uid"]][f"BODY[{detail[b'part']}]".encode()]
-    )
+    if detail[b"encoding"] == b"base64":
+        data = base64.b64decode(data)
+    # else, 7BIT is left as it is
     print(f"Attachment: '{detail[b'filename']}', {len(data)} bytes.")
     return data
 
