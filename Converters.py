@@ -10,7 +10,11 @@ def ConvertNum(string):
         else:
             return f
     except ValueError:
+        # If it's blank or doesn't look like a number
         return None
+    except AttributeError:
+        # If its not a string, it's probably already converted
+        return string
 
 def Concatenate(filedata,settings):
     """Writes raw output to a single file from a list or generator
@@ -41,6 +45,8 @@ def MetOfficeWeather(filedata,settings):
     # Explicitly empty header coloumns are discarded.
     headers = settings["headers"].split(",")
     itemlist, headings = [], []
+    # Make a list of coloumn numbers of totalising data which needs un-totalling.
+    totals = [ int(i) for i in settings["totals"].split(",") ]
     for item in enumerate(headers, start=1):
         if item[1] != "":
             itemlist.append(item[0])
@@ -73,7 +79,20 @@ def MetOfficeWeather(filedata,settings):
                             # Break out of for loop to start data gathering
                             break
                 # Should now be on data
+                # Reset totals
+                prevtotal = { i:0 for i in totals}
                 for line in csvinput:
+                    # Store all the values which are marked as totals
+                    # As long as they arent blank, subtract the previous
+                    # total from the current total and store this difference
+                    # back in place as if it was originall incremental data.
+                    # Then carry over the original totals.
+                    temptotals = {}
+                    for i in totals:
+                        temptotals[i] = ConvertNum(line[i])
+                        if None not in (temptotals[i], prevtotal[i]):
+                            line[i] = temptotals[i] - prevtotal[i]
+                    prevtotal = temptotals
                     # Assumes dates are valid %d/%m/%Y,%H%M and will become
                     # %d/%m/%Y %H:%M with leading zeros inserted if missing.
                     # All numbers are converted or left blank
