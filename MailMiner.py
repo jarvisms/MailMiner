@@ -127,7 +127,7 @@ def FindAttachments(server,settings):
                         }
                     )
                     # If encoding is correct and filename matches the regex
-                    if properties[b"encoding"] in (b"base64", b"7BIT") and regexmatch:
+                    if properties[b"encoding"].lower() in (b"base64", b"7bit") and regexmatch:
                         # It should already have a dict so
                         # add this filename and email body part number
                         # (which start from 1)
