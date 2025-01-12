@@ -203,6 +203,75 @@ Error: {e}""")
     print(f"Finished. {r} unique rows written\n")
     return None
 
+def MeterOnline(filedata,settings):
+    """Write output to a csv file of predefined format from a concatenation
+    of multiple file attachements from the Meter Online wide HH csv format
+
+    Expects to be given an iterable giving dictionaries
+    with a filename and raw bytes filedata"""
+    import csv
+    import re
+    from datetime import datetime, timedelta
+    from operator import itemgetter
+    # Precompile regex to capture text before line ends
+    regexsplitlines = re.compile(b'^(.+?)(?:\r\n|\r|\n|$)+', flags=re.MULTILINE)
+    meterdata = {}
+    r=0
+    for file in filedata:
+        try:
+            print(f"Processing file '{file[b'filename']}'")
+            # Take the raw file which is just bytes,
+            # chop it into lines and feed that into csv module.
+            # regex finditer is more memory efficient than str.splitlines()
+            # which does not scale to large file sizes.
+            csvinput = csv.reader(
+                m.group(1).decode() for m in regexsplitlines.finditer(
+                    file["bytedata"],
+                )
+            )
+            for line in csvinput:
+                # 0th coloumn is a friendly name which will be ignored
+                # 1st coloumn is the serial number which is used in the header
+                # 2nd coloumn is the timestamp of the totalised read which is used (Note below)
+                # 3rd coloumn is the totalised reading which will be ignored
+                # Remaining coloumns are the HH data (48, but this is not enforced)
+                #
+                # The timestamp and totalised read is assumed to be for the day after the HH data
+                # It ia assumed to be GMT/UTC and in the format %Y-%m-%d %H:%M:%S
+                date = (datetime.strptime(line[2][:10], "%Y-%m-%d") - timedelta(days=1))
+                # The first value (4th coloumn) is assumed to be for the period starting at midnight
+                # Add 30 minutes for each subsequent coloumn
+                try:
+                    meterdata[line[1]] |= { date+t*timedelta(minutes=30) : ConvertNum(r) for t,r in enumerate(line[4:]) }
+                except KeyError:
+                    meterdata[line[1]] = { date+t*timedelta(minutes=30) : ConvertNum(r) for t,r in enumerate(line[4:]) }
+                r+=1
+            print(f"{r} unique rows read so far")
+        except Exception as e:
+            print(f"""Encountered some issue with '{file[b"filename"]}',
+but {r} rows read so far.
+Error: {e}""")
+    # Gather all timestamps from all meters in case lines were on different days
+    alltimestamps = set([ timestamps for readings in meterdata.values() for timestamps in readings.keys() ])
+    # Define the headers by what meter serial numbers we have
+    headers = ["Timestamp"] + list(meterdata.keys())    # Also fieldnames for csv.DictWriter
+    with open(settings["outfile"], "a+", newline="") as output:
+        # Create the Output CSV File
+        csvout = csv.DictWriter(output, headers, dialect="excel")
+        w=0
+        # Only if needed, apply the Headings which consist of all meter serial numbers found
+        if not(output.tell()): # in append mode, tell==0 if new file
+            csvout.writeheader()
+        # Each line in the csv file represent a date, with a reading for each (or empty)
+        for timestamp in sorted(alltimestamps):
+            csvout.writerow( {
+                "Timestamp" : timestamp.strftime("%d/%m/%Y %H:%M"),
+                **{ meter : meterdata[meter].get(timestamp) for meter in meterdata },
+            } )
+            w+=1
+    print(f"Finished. {r} row read, {w} rows written\n")
+    return None
+
 def Shelve(filedata,settings):
     """Writes raw output to a shelve file
         
