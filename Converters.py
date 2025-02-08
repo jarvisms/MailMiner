@@ -207,12 +207,13 @@ def MeterOnline(filedata,settings):
     """Write output to a csv file of predefined format from a concatenation
     of multiple file attachements from the Meter Online wide HH csv format
 
+    The output for this converter is designed to be injested by Team Sigma
+
     Expects to be given an iterable giving dictionaries
     with a filename and raw bytes filedata"""
     import csv
     import re
     from datetime import datetime, timedelta
-    from operator import itemgetter
     # Precompile regex to capture text before line ends
     regexsplitlines = re.compile(b'^(.+?)(?:\r\n|\r|\n|$)+', flags=re.MULTILINE)
     meterdata = {}
@@ -237,7 +238,7 @@ def MeterOnline(filedata,settings):
                 # Remaining coloumns are the HH data (48, but this is not enforced)
                 #
                 # The timestamp and totalised read is assumed to be for the day after the HH data
-                # It ia assumed to be GMT/UTC and in the format %Y-%m-%d %H:%M:%S
+                # It is assumed to be GMT/UTC and in the format %Y-%m-%d %H:%M:%S
                 date = (datetime.strptime(line[2][:10], "%Y-%m-%d") - timedelta(days=1))
                 # The first value (4th coloumn) is assumed to be for the period starting at midnight
                 # Add 30 minutes for each subsequent coloumn
@@ -270,6 +271,175 @@ Error: {e}""")
             } )
             w+=1
     print(f"Finished. {r} row read, {w} rows written\n")
+    return None
+
+def MeterOnlineCalibrated(filedata,settings):
+    """Write output to a csv file of predefined format from a concatenation
+    of multiple file attachements from the Meter Online wide HH csv format
+
+    The output for this converter is designed to be injested by Coherent DCS
+    and it will attempte to provide calibrated halfhourly meter readings
+    for each day even though the totalised reading may correspond to a
+    different day.
+
+    Expects to be given an iterable giving dictionaries
+    with a filename and raw bytes filedata"""
+    import csv
+    import re
+    from datetime import datetime, timedelta
+    def calibrate(completedata, perioddata, knowntotals):
+        for ts,periodValue in sorted(perioddata.items()):  # ts is datetime, periodValue was provided
+            if ts in knowntotals:  # check if we already know a totalValue for this timestamp
+                # if we do...
+                totalValue, real = knowntotals.pop(ts) # return the reading itself and remove from known list
+                nextts = ts+timedelta(minutes=30)  # work out what the next halfhour is
+                nextTotalValue, nextReal = knowntotals.get(nextts,(None,False))  # get the next reading if it exists, or dummy if not
+                if nextTotalValue and nextReal : # if the next reading is known and its real
+                    periodValue = nextTotalValue - totalValue # adjust the current period value to align with it and discard the original one
+                else: # if the next reading doesnt exist, or it does but its not real
+                    knowntotals[nextts] = (totalValue+periodValue, False)  # pre-calculate the next reading
+                completedata[ts] = (periodValue, totalValue) # store the newly calculated data
+                del perioddata[ts]  # Remove from the queue now we have complete data
+        for ts,periodValue in sorted(perioddata.items(), reverse=True):  # now go backwards through anything remaining
+            nextts = ts+timedelta(minutes=30)
+            if nextts in completedata:  # check if we are just a little before something we already worked out
+                nextPeriodValue, nextTotalValue = completedata.get(nextts) # return the reading itself
+                totalValue = nextTotalValue - periodValue
+                completedata[ts] = (periodValue, totalValue) # store the newly calculated data
+                del perioddata[ts]  # Remove from the queue now we have complete data
+        for ts,reads in knowntotals.items(): # Just for padding things out but may get overritten next time
+            completedata[ts] = (None,reads[0])
+        for ts,reads in perioddata.items():
+            completedata[ts] = (reads,None) # Just for padding things out but may get overritten next time
+        return completedata, perioddata, knowntotals
+    # Precompile regex to capture text before line ends
+    regexsplitlines = re.compile(b'^(.+?)(?:\r\n|\r|\n|$)+', flags=re.MULTILINE)
+    perioddata, knowntotals, completedata = {}, {}, {}
+    if (storagefile := settings.get("storagefile")):
+        t,p,c = 0,0,0
+        try:
+            with open(storagefile, newline='') as unmatchedfile:
+                unmatchedcsv = csv.reader(unmatchedfile)
+                for reads in unmatchedcsv:
+                    # Should be in the format of [ 0:meterid, 1:timestamp, 2:periodValue, 3:totalValue, 4:Real ]
+                    meter = reads[0]
+                    ts = datetime.fromisoformat(reads[1])
+                    if reads[2] == "":  # No period data given so this must be a total value
+                        try:
+                            knowntotals[meter] |= { ts : (ConvertNum(reads[3]), reads[4].lower() == "true") }
+                        except KeyError:
+                            knowntotals[meter] = { ts : (ConvertNum(reads[3]), reads[4].lower() == "true") }
+                        t+=1
+                    elif reads[3] == "": # No total data given so this must be a period data
+                        try:
+                            perioddata[meter] |= { ts : ConvertNum(reads[2]) }
+                        except KeyError:
+                            perioddata[meter] = { ts : ConvertNum(reads[2]) }
+                        p+=1
+                    elif "" not in (reads[2],reads[3]) and reads[4] == "": # Fully populated is completed data
+                        try:
+                            completedata[meter] |= { ts : (ConvertNum(reads[2]) ,ConvertNum(reads[3])) }
+                        except KeyError:
+                            completedata[meter] = { ts : (ConvertNum(reads[2]) ,ConvertNum(reads[3])) }
+                        c+=1
+                    else:
+                        print(f"Something wrong with this line: {reads}")
+        except FileNotFoundError:
+            print(f"Storage file not found: '{storagefile}'")
+        print(f"Storage file loaded with {t} totaliser reads, {p} periodic reads, and {c} already complete readings")
+    r=0
+    for file in filedata:
+        try:
+            print(f"Processing file '{file[b'filename']}'")
+            # Take the raw file which is just bytes,
+            # chop it into lines and feed that into csv module.
+            # regex finditer is more memory efficient than str.splitlines()
+            # which does not scale to large file sizes.
+            csvinput = csv.reader(
+                m.group(1).decode() for m in regexsplitlines.finditer(
+                    file["bytedata"],
+                )
+            )
+            for line in csvinput:
+                # 0th coloumn is a friendly name which will be ignored
+                # 1st coloumn is the serial number which is used in the header
+                # 2nd coloumn is the timestamp of the totalised read which is used for calibration (Note below)
+                # 3rd coloumn is the totalised reading which will be used for calibration
+                # Remaining coloumns are the HH data (48, but this is not enforced)
+                #
+                # The timestamp and totalised read is assumed to be for the day after the HH data
+                # It is assumed to be GMT/UTC and in the format %Y-%m-%d %H:%M:%S
+                # It will be snapped to the closest halfhour for the known reading
+                timestamp = datetime.strptime(line[2], "%Y-%m-%d %H:%M:%S")
+                if timestamp.minute < 15:
+                    timestamp = timestamp.replace(minute=0, second=0, microsecond=0)
+                elif 15 <= timestamp.minute < 45:
+                    timestamp = timestamp.replace(minute=30, second=0, microsecond=0)
+                elif timestamp.minute >= 45:
+                    timestamp = timestamp.replace(minute=30, second=0, microsecond=0) + timedelta(hours=1)
+                # It will be snapped to the day before for the HH data
+                date = (timestamp.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1))
+                # The first value (4th coloumn) is assumed to be for the period starting at midnight
+                # Add 30 minutes for each subsequent coloumn
+                try:
+                    knowntotals[line[1]] |= { timestamp : (ConvertNum(line[3]), True) }
+                    perioddata[line[1]] |= { date+t*timedelta(minutes=30) : ConvertNum(r) for t,r in enumerate(line[4:]) }
+                except KeyError:
+                    knowntotals[line[1]] = { timestamp : (ConvertNum(line[3]), True) }
+                    perioddata[line[1]] = { date+t*timedelta(minutes=30) : ConvertNum(r) for t,r in enumerate(line[4:]) }
+                r+=1
+            print(f"{r} unique rows read so far")
+        except Exception as e:
+            print(f"""Encountered some issue with '{file[b"filename"]}',
+but {r} rows read so far.
+Error: {e}""")
+    for meter in perioddata:
+        completedata[meter] = {}
+        completedata[meter], perioddata[meter], knowntotals[meter] = calibrate(completedata[meter], perioddata[meter], knowntotals[meter])
+    # Gather all timestamps from all meters in case lines were on different days
+    alltimestamps = set([ timestamps for readings in completedata.values() for timestamps in readings.keys() ])
+    # Define the headers by what meter serial numbers we have
+    headers = ["Timestamp"] + list(completedata.keys())    # Also fieldnames for csv.DictWriter
+    if (SigmaOutFile := settings.get("sigmaoutfile")):
+        with open(SigmaOutFile, "a+", newline="") as output:
+            # Create the Output CSV File
+            csvout = csv.DictWriter(output, headers, dialect="excel")
+            w=0
+            # Only if needed, apply the Headings which consist of all meter serial numbers found
+            if not(output.tell()): # in append mode, tell==0 if new file
+                csvout.writeheader()
+            # Each line in the csv file represent a date, with a reading for each (or empty)
+            for timestamp in sorted(alltimestamps):
+                csvout.writerow( {
+                    "Timestamp" : timestamp.strftime("%d/%m/%Y %H:%M"),
+                    **{ meter : data[1] for meter in completedata if (data := completedata[meter].get(timestamp)) },
+                } )
+                w+=1
+        print(f"Finished Team Sigma File. {w} rows written\n")
+    if (DCSOutFile := settings.get("dcsoutfile")):
+        with open(DCSOutFile, "a+", newline='') as outputfile:
+            outputcsv = csv.writer(outputfile)
+            # Only if needed, apply the Headings which consist of all meter serial numbers found
+            if not(outputfile.tell()): # in append mode, tell==0 if new file
+                _ = outputcsv.writerow(["Serial","Date","Time","Duration","PeriodValue","TotalValue"])
+            w=0
+            for meter in completedata:
+                for ts,reads in sorted(completedata[meter].items()): # Output in datetime order
+                    _ = outputcsv.writerow([meter, ts.strftime(r"%d/%m/%Y"), ts.strftime(r"%H:%M:%S"), 30, reads[0] or 0, reads[1] or 0]) # swap None for zeros
+                    w+=1
+        print(f"Finished DCS File. {w} rows written\n")
+    with open(settings.get("storagefile", "MeterOnlineCalibrated.csv"), "w", newline='') as unmatchedfile:
+        unmatchedcsv = csv.writer(unmatchedfile)
+        t,p = 0,0
+        for meter in knowntotals:
+            for ts,reads in sorted(knowntotals[meter].items()): # Output in datetime order
+                _ = unmatchedcsv.writerow([meter, ts.isoformat(sep=" "), None, reads[0], reads[1]])
+                t+=1
+        for meter in perioddata:
+            for ts,reads in sorted(perioddata[meter].items()): # Output in datetime order
+                _ = unmatchedcsv.writerow([meter, ts.isoformat(sep=" "), reads, None, None])
+                p+=1
+    print(f"Storage file now contains {t} unmatched total readings and {p} unmatched periodic reads\n")
     return None
 
 def Shelve(filedata,settings):
